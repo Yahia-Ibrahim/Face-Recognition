@@ -35,6 +35,7 @@ class GaussianMixture():
         N_k_pies = np.tile(A=k_pies, reps=(X.shape[0], 1))
         denomerator = np.sum(a=responsabilities * N_k_pies, axis=1) # Normalization constant
         N_denomerator = np.tile(A=denomerator, reps=(k_means.shape[0], 1)).T
+        N_denomerator = np.clip(N_denomerator, 1e-10, np.inf)
         responsabilities = responsabilities * N_k_pies / N_denomerator
         return responsabilities.T
 
@@ -43,14 +44,15 @@ class GaussianMixture():
     def _m_step(self, X, responsabilities):
         responsabilities_sum = np.sum(a=responsabilities, axis=1)
         Posteriors = responsabilities_sum / X.shape[0]
-        means = responsabilities @ X / responsabilities_sum
+        means = responsabilities @ X / responsabilities_sum[:, np.newaxis]
         covs = []
         for k in range(responsabilities.shape[0]):
             X_centred = X - means[k, :]
             X_weighted = X_centred * np.tile(responsabilities[k, :], reps=(X.shape[1],1)).T
-            covs.append(X_weighted.T@X_centred/np.sum(responsabilities[k, :]))
+            cov = X_weighted.T @ X_centred / np.sum(responsabilities[k, :])
+            cov += 1e-6 * np.eye(X.shape[1])  # Regularize covariance
+            covs.append(cov)
         covs = np.array(covs)
-        print(Posteriors.shape, means.shape, covs.shape)
         return Posteriors, means, covs
     
     def fit(self, X):
@@ -61,10 +63,19 @@ class GaussianMixture():
 
         for i in range(self.max_iter):
             responsabilities = self._e_step(X, posteriors, means, covs)
-            covs_prev = covs
+            covs_prev = covs.copy()
             posteriors, means, covs = self._m_step(X, responsabilities)
-            if np.min(abs(covs - covs_prev) < 0.1):
+            
+            # NaN detection
+            if np.isnan(responsabilities).any() or np.isnan(means).any() or np.isnan(covs).any():
+                print(f"NaN detected at iteration {i}, stopping early")
                 break
+
+            # Proper convergence check
+            if np.max(np.abs(covs - covs_prev)) < 1e-2:
+                print(f"Converged at iteration {i}")
+                break
+
         self.posteriors, self.means, self.covs = posteriors, means, covs
         return self
     
